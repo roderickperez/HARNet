@@ -1,153 +1,563 @@
-#!/usr/bin/env python3
-"""
-HARNet CLI
-"""
+from msilib import sequence
+from re import T
+import streamlit as st
+from streamlit_option_menu import option_menu
+from datetime import date
 
-import argparse
-import json
-import logging
-import os
-import shutil
-from pathlib import Path
+import numpy as np
+###############################
+# Internal Libraries
+from loadFunctions import *
+from statisticalFunctions import *
+from plottingFunctions import *
+from dataRangesConvertions import *
+from analysisFunctions import *
+from statisticalForecast import *
+from deepLearningModelFunctions import *
+from volatilityFunctions import *
+from utilFunctions import *
+from predictionTestPredErrorFunctions import *
+from util import *
+from model import *
+from main import *
+##############################
+from pmdarima import auto_arima
+from sklearn.preprocessing import MinMaxScaler
+# from keras.preprocessing.sequence import TimeseriesGenerator
+############################
+############################
 
-import pandas as pd
+plt.rcParams["figure.figsize"] = (6, 2)
+plt.rcParams.update({'font.size': 6})
+##############################
+st.set_page_config(page_title="HARNet | UniWien Research Project",
+                   page_icon=":chart_with_upwards_trend:",
+                   layout="wide")
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-import tensorflow as tf
-from pydantic.json import pydantic_encoder
-from tensorflow.python.keras import backend as K
+#########################
+# ---- Header ----
+with st.container():
+    st.title(':chart_with_upwards_trend: HarNet App')
 
-from model import scaler_from_cfg, model_from_cfg, get_loss, LRTensorBoard, MetricCallback, get_model_metrics
-from util import HARNetCfg, get_MAN_data, year_range_to_idx_range
+# Sidebar
 
-pd.options.display.float_format = '{:,e}'.format
-pd.options.display.width = 0
+st.sidebar.image("images/uniWienLogo.png", use_column_width=True)
+
+########################################
+# Data Loading
+dataSelection = st.sidebar.selectbox(
+    "Dataset Selection", ["Yahoo Finance", "MAN", "USEPUINDXD", "VIXCLS", "Own Dataset"])
+
+generalParametersExpander = st.sidebar.expander('General Session Parameters')
 
 
-def main():
-    # parse command line
-    parser = argparse.ArgumentParser()
-    parser.add_argument("cfg", default="config.in", nargs='?',
-                        help="Base configuration file to use (e.g. config.in). Must be a JSON-file of a config-dict. The used configuration is a combination of defaults set in util.py and parameters set in this file.")
-    args = parser.parse_args()
+if dataSelection == "Yahoo Finance":
+    stock = ("AAPL", "AMZN", "GOOG", "MSFT", "INTC", "CSCO", "NVDA", "AMD", "TSLA", "MU", "NFLX", "PYPL", "ADBE", "ADP", "ATVI", "BIDU", "CMCSA", "COST", "CRM", "CSC", "CSX", "CTSH", "CTXS", "CTX", "DISH", "DLTR", "EA", "EBAY", "EXPE", "FAST", "FISV", "GILD", "GOOGL", "GPRO", "HAS", "HOLX",
+             "ILMN", "INTU", "ISRG", "KLAC", "LRCX", "MAR", "MAT", "MCHP", "MDLZ", "MNST", "MSI", "NTAP", "NTES", "NVDA", "ORLY", "PAYX", "PCAR", "PYPL", "QCOM", "REGN", "ROST", "SBUX", "SIRI", "SNPS", "STX", "SWKS", "TMUS", "TRIP", "TSLA", "TXN", "VRSK", "VRTX", "WBA", "WDC", "ZM", "ZTS")
+    stockSelection = st.sidebar.selectbox("Select a stock", stock)
 
-    # load configuration
-    cfg = HARNetCfg()
-    if os.path.exists(args.cfg):
-        with open(args.cfg) as f:
-            cfg_in = json.load(f)
-        for key in cfg_in:
-            setattr(cfg, key, cfg_in[key])
+    dateStart = "2015-01-01"
+    dateEnd = date.today().strftime("%Y-%m-%d")
 
-    exp_name = os.path.splitext(os.path.basename(args.cfg))[0]
-    logger = logging.getLogger('harnet')
+    filename = None
+    df = loadData(filename, dataSelection, stockSelection, dateStart, dateEnd)
 
-    logger.info(f"Initializing experiment {exp_name}: {cfg.epochs} ...")
-    logger.debug(json.dumps(cfg, indent=4, default=pydantic_encoder))
+elif dataSelection == 'MAN':
+    filename = "data/MAN_data.csv"
+    df = loadData(filename, dataSelection, stock=None,
+                  dateStart=None, dateEnd=None)
 
-    save_path_curr = os.path.join(cfg.save_path, exp_name)
-    tb_path_curr = os.path.join(cfg.tb_path, exp_name)
+    stocksList = df['Symbol'].unique()
+    # Deafult value is DJI
+    stockSelection = st.sidebar.selectbox(
+        "Symbol", index=5, options=stocksList)
 
-    if not os.path.exists(Path(cfg.save_path)):
-        os.makedirs(Path(cfg.save_path))
+    # Group the data by stock symbol
+    df_symbol = df.groupby(['Symbol'])
+    df = df_symbol.get_group(stockSelection)
+    df = df.drop('Symbol', axis=1)
 
-    if not os.path.exists(Path(save_path_curr)):
-        os.makedirs(Path(save_path_curr))
+elif dataSelection == 'USEPUINDXD':
+    filename = "data/USEPUINDXD_data.csv"
+    df = loadData(filename, dataSelection, stock=None,
+                  dateStart=None, dateEnd=None)
 
-    # save full config
-    with open(os.path.join(save_path_curr, "cfg_full.in"), 'w') as f:
-        json.dump(cfg, f, indent=4, default=pydantic_encoder)
-
-    # copy original config file
-    shutil.copyfile(args.cfg, os.path.join(save_path_curr, os.path.basename(args.cfg)))
-
-    # load data
-    ts = get_MAN_data(cfg.path_MAN, cfg.asset, cfg.include_sv)
-
-    if cfg.include_sv and "log" in cfg.scaler.lower():
-        ts.iloc[:, -1] = (1 + ts.values[:, -1] / ts.values[:, 0])
-
-    # normalize input time series
-    scaler = scaler_from_cfg(cfg)
-    ts_norm = pd.DataFrame(data=scaler.fit_transform(ts.to_numpy()), index=ts.index)
-
-    # create train datasets
-    year_range_train = [cfg.start_year_train, cfg.start_year_train + cfg.n_years_train]
-    year_range_test = [cfg.start_year_train + cfg.n_years_train,
-                       cfg.start_year_train + cfg.n_years_train + cfg.n_years_test]
-
-    idx_range_train = year_range_to_idx_range(ts_norm, year_range_train)
-    idx_range_test = year_range_to_idx_range(ts_norm, year_range_test)
-
-    # init model
-    model = model_from_cfg(cfg, ts_norm, scaler, idx_range_train)
-
-    # fit model
-    if not model.is_tf_model:
-        print(f"\n-- Fitting {exp_name}... --")
-        model.fit(ts_norm.values[idx_range_train[0] - model.max_lag:idx_range_train[1], :])
-        model.save(save_path_curr)
+elif dataSelection == 'VIXCLS':
+    filename = "data/VIXCLS_data.csv"
+    df = loadData(filename, dataSelection, stock=None,
+                  dateStart=None, dateEnd=None)
+    df = df['VIXCLS'].astype(float)
+    df = pd.DataFrame(df, columns=['VIXCLS'])
+################################
+# Horizontal Menu
+# ---- Header ----
+with st.container():
+    selected = option_menu(
+        menu_title=None,
+        options=["Data", "Stats", "Analysis",
+                 "Volatility", "Plot", "Forecast"],
+        icons=['table', 'clipboard-data', 'sliders',
+               'graph-up', 'activity', 'share'],
+        orientation="horizontal",
+        default_index=0,
+    )
+########################################
+if selected == 'Data':
+    if dataSelection == "Yahoo Finance":
+        st.subheader(f"Data: {dataSelection} | Stock: {stockSelection}")
+        st.dataframe(df)
+    elif dataSelection == "MAN":
+        st.subheader(f"Data: {dataSelection} | Stock: {stockSelection}")
+        st.dataframe(df)
+    elif dataSelection == "Own Dataset":
+        pass
+        # if uploaded_file is None:
+        #     st.subheader("Please Upload a Dataset")
+        #     df = None
+        # elif uploaded_file is not None:
+        #     st.subheader(f"Data: Own Dataset | File: {uploaded_file.name}")
+        #     st.dataframe(df)
     else:
-        print(f"\n-- Fitting {exp_name} with {cfg.epochs} epochs... --")
-        optimizer = tf.keras.optimizers.get(cfg.optimizer)
-        K.set_value(optimizer.lr, cfg.learning_rate)
+        st.subheader(f"Data: {dataSelection}")
+        st.dataframe(df)
 
-        # hier richtige inp ts and prediction uebergeben
-        ts_norm_in = model.get_inp_ts(ts_norm.values)
+elif selected == 'Stats':
+    if dataSelection == "Yahoo Finance":
+        st.subheader(f"Data: {dataSelection} | Stock: {stockSelection}")
+        st.dataframe(df.describe())
+    elif dataSelection == "MAN":
+        st.subheader(f"Data: {dataSelection} | Stock: {stockSelection}")
+        st.dataframe(df.describe())
+    elif dataSelection == "Own Dataset":
+        pass
+    else:
+        st.subheader(f"Data: {dataSelection}")
+        st.dataframe(df.describe())
 
-        model.compile(optimizer=optimizer, loss=get_loss(cfg.loss), sample_weight_mode="temporal")
+elif selected == 'Analysis':
 
-        callbacks = []
-        callbacks.append(LRTensorBoard(log_dir=tb_path_curr, profile_batch=0))
-        callbacks.append(MetricCallback(ts.to_numpy(), idx_range_train, idx_range_test, scaler, tb_path_curr,
-                                        save_best_weights=cfg.save_best_weights))
-        model.run_eagerly = cfg.run_eagerly
+    if dataSelection == "Yahoo Finance":
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        analysisSelection = st.sidebar.radio(
+            'Select Analysis Mode', ('ADF Test', 'PACF', 'ACF', 'Seasonal Decomposition', 'Histogram', 'Mean & Variance Test'))
+        st.subheader(
+            f"Data: {dataSelection} | Stock: {stockSelection} | Variable: {variable}")
 
-        if cfg.baseline_fit == 'WLS':
-            weights = 1 / model(ts_norm_in[:, idx_range_train[0] - model.max_lag:idx_range_train[1] - 1, :])
+        analysisOptions(df, variable, analysisSelection)
+
+    elif dataSelection == "MAN":
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        analysisSelection = st.sidebar.radio(
+            'Select Analysis Mode', ('ADF Test', 'PACF', 'ACF', 'Seasonal Decomposition', 'Histogram', 'Mean & Variance Test'))
+        st.subheader(
+            f"Data: {dataSelection} | Stock: {stockSelection} | Variable: {variable}")
+
+        analysisOptions(df, variable, analysisSelection)
+
+    elif dataSelection == "Own Dataset":
+        pass
+    elif dataSelection == "VIXCLS":
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        analysisSelection = st.sidebar.radio(
+            'Select Analysis Mode', ('ADF Test', 'PACF', 'ACF', 'Seasonal Decomposition', 'Histogram', 'Mean & Variance Test'))
+        st.subheader(
+            f"Data: {dataSelection}")
+        analysisOptions(df, variable, analysisSelection)
+    else:
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        analysisSelection = st.sidebar.radio(
+            'Select Analysis Mode', ('ADF Test', 'PACF', 'ACF', 'Seasonal Decomposition', 'Histogram', 'Mean & Variance Test'))
+        st.subheader(
+            f"Data: {dataSelection}")
+        analysisOptions(df, variable, analysisSelection)
+
+elif selected == 'Volatility':
+    if dataSelection == "Yahoo Finance" or dataSelection == 'MAN':
+
+        # Horizontal Menu
+        volatilityHorizontalMenu = option_menu(
+            menu_title=None,
+            options=["Data", "Plots"],
+            icons=['table', 'graph-up'],
+            orientation="horizontal",
+            default_index=1,
+        )
+
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        st.subheader(
+            f"Data: {dataSelection} | Stock: {stockSelection} | Variable: {variable}")
+
+        volatilityParametersExpander = st.sidebar.expander(
+            "Volatility Parameters")
+
+        volatilitySelection = volatilityParametersExpander.radio(
+            'Select Volatility Mode', ('Volatility', 'Historical Volatility', 'Realized Volatility'))
+
+        volatilityRollingWindow = volatilityParametersExpander.slider(
+            'Select RollingWindow', 1, 25, 5)
+
+        variableName = volatilityParametersExpander.text_input(
+            'Variable Name', value=str(f"CalcVolatility_{volatilitySelection}_{variable}_{volatilityRollingWindow}"))
+
+        fileExportName = volatilityParametersExpander.text_input(
+            'File Export Name', value='New Volatility File')
+        fileExportName = fileExportName + '.csv'
+
+        st.sidebar.info(
+            'The recommended variability to calculate the volatility is the Adj Close variable.')
+
+        if volatilitySelection == 'Volatility':
+            df = volatility(df, variable, variableName)
+        elif volatilitySelection == 'Historical Volatility':
+            df = historicalVolatility(
+                df, variable, volatilityRollingWindow, variableName)
+        elif volatilitySelection == 'Realized Volatility':
+            df = realizedVolatility(
+                df, variable, volatilityRollingWindow, variableName)
+
+        df_csv = to_excel(df)
+        st.sidebar.download_button(label='📥 Download Current Result',
+                                   data=df_csv,
+                                   file_name=str(fileExportName))
+
+        if volatilityHorizontalMenu == "Data":
+            st.dataframe(df)
+        elif volatilityHorizontalMenu == "Plots":
+            plotDataFrame(df[variableName])
+
+    else:
+        st.subheader("This feature is not available for this dataset.")
+
+elif selected == 'Plot':
+
+    if dataSelection == "Yahoo Finance":
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        st.subheader(
+            f"Data: {dataSelection} | Stock: {stockSelection} | Variable: {variable}")
+        plotDataFrame(df[variable])
+    elif dataSelection == "MAN":
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        st.subheader(
+            f"Data: {dataSelection} | Stock: {stockSelection} | Variable: {variable}")
+        plotDataFrame(df[variable])
+    elif dataSelection == "Own Dataset":
+        pass
+
+    elif dataSelection == "VIXCLS":
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        st.subheader(
+            f"Data: {dataSelection}")
+        plotDataFrame(df[variable])
+    else:
+        variable = st.sidebar.selectbox(
+            "Select Variable to Analyze", df.columns)
+        st.subheader(
+            f"Data: {dataSelection}")
+        plotDataFrame(df[variable])
+
+elif selected == 'Forecast':
+    variable = st.sidebar.selectbox(
+        "Select Variable to Analyze", df.columns)
+
+    modelTypeSelectionExpander = st.sidebar.expander("Model Type")
+
+    modelType = modelTypeSelectionExpander.radio(
+        'Select Mode', ('Statistical', 'Deep Learning'))
+
+    if modelType == 'Statistical':
+
+        statisticalModelMode = modelTypeSelectionExpander.selectbox(
+            'Mode', ['Select Best Model (Auto)', 'Select Model'])
+        modelResultsExpander = st.sidebar.expander("Model Results")
+
+        if statisticalModelMode == 'Select Best Model (Auto)':
+            if modelTypeSelectionExpander.button('Select Best Model (Auto)'):
+                stepwise_fit = auto_arima(
+                    df[variable], trace=True, suppress_warnings=True)
+                st.write(stepwise_fit.summary())
         else:
-            weights = tf.ones_like(ts_norm_in[:, idx_range_train[0]:idx_range_train[1], :])
+            modelParametersExpander = st.sidebar.expander("Model Parameters")
 
-        valid_batch_gen_idxs = list(
-            range(idx_range_train[0] + model.max_lag, idx_range_train[1] - cfg.label_length + 1))
-        ds_fit = tf.data.Dataset.from_generator(
-            model.random_batch_generator(ts_norm_in[:, :idx_range_train[1], :], idx_range_train,
-                                         cfg.label_length,
-                                         cfg.batch_size, cfg.steps_per_epoch,
-                                         valid_batch_gen_idxs, weights),
-            (tf.float32, tf.float32, tf.float32), output_shapes=(
-                tf.TensorShape(
-                    [cfg.batch_size, model.max_lag + cfg.label_length - 1,
-                     model.channels_in]),
-                tf.TensorShape(
-                    [cfg.batch_size, cfg.label_length, model.channels_out]),
-                tf.TensorShape(
-                    [cfg.batch_size, cfg.label_length, model.channels_out])
-            ))
+            daysForecast = modelParametersExpander.slider(
+                'Select Days to Forecast', 1, 360, 10)
 
-        history = model.fit(ds_fit, epochs=cfg.epochs, verbose=cfg.verbose,
-                            callbacks=callbacks)  # [TqdmCallback(verbose=1)]
+            dataSelectionExpander = st.sidebar.expander(
+                "Data Train | Test Split")
+            train_size = dataSelectionExpander.slider(
+                'Train Size', 0.0, 1.0, 0.8, 0.05)
 
-        # plot optimization
-        # dpv.plot_values(list(history.history.values()), None, fmt="-", logx=False,
-        #                 title_str="Optimization History for Model %s" % config.model.name,
-        #                 labels=list(history.history.keys()))
-        # plt.gcf().savefig(Path(save_path_curr + "/optimization.pdf"))
-        # model.summary()
-        chkpt_model = tf.train.Checkpoint(model=model)
-        chkpt_model.write(save_path_curr + "/model_params")
-        pd.DataFrame.from_dict(history.history).to_csv(save_path_curr + '/metrics_history.csv', index=False)
+            train, test = splitData(df, variable, train_size)
 
-    metrics_train = get_model_metrics(model, scaler, ts.to_numpy(), idx_range_train, prefix='train')  #
-    df_metrics_train = pd.DataFrame(metrics_train, index=[cfg.model])
-    metrics_test = get_model_metrics(model, scaler, ts.to_numpy(), idx_range_test, prefix='test')  #
-    df_metrics_test = pd.DataFrame(metrics_test, index=[cfg.model])
-    df_metrics = pd.concat([df_metrics_train, df_metrics_test], axis=1)
-    print("")
-    print(df_metrics)
-    df_metrics.to_csv(save_path_curr + "/metrics.csv")
-    print(f"\n-- Experiment finished. Results were saved to {save_path_curr} --\n")
+            dataSelectionExpander.write(f"Train Size: {train.shape}")
+            dataSelectionExpander.write(f"Test Size: {test.shape}")
 
+            modelSelection = modelTypeSelectionExpander.selectbox(
+                "Select Statistical Model", ["AR", "MA", "ARIMA", "SARIMAX"])
+            # # Horizontal Menu
+            # forecastHorizontalMenu = option_menu(
+            #     menu_title=None,
+            #     options=["Model Summary", "Data", "Plots"],
+            #     icons=['clipboard-data', 'table', 'graph-up'],
+            #     orientation="horizontal",
+            #     default_index=0,
+            # )
 
-if __name__ == '__main__':
-    main()
+            if modelSelection == 'AR':
+                p = modelParametersExpander.slider(
+                    'p', 0, 10, 1)
+                if modelTypeSelectionExpander.button('Compute Selected Model'):
+
+                    model = ARIMA(df[variable], order=(p, 0, 0))
+                    model = model.fit()
+
+                    testPred = model.predict(
+                        start=len(train), end=len(df)-1)
+
+                # if forecastHorizontalMenu == "Model Summary":
+                    st.write("Model Summary")
+                    st.write(model.summary())
+                # elif forecastHorizontalMenu == "Data":
+                    st.write('Test Predictions')
+                    st.dataframe(testPred)
+
+                    st.write('Metrics')
+                    mse, mae, r2, rmse = errorCalculation(test, testPred)
+                    st.write('MSE: ' + str(mse))
+                    st.write('MAE: ' + str(mae))
+                    st.write('R2: ' + str(r2))
+                    st.write('RMSE: ' + str(rmse))
+
+                    st.write('Forecast')
+                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                        df.index[-1]), periods=daysForecast+1, freq='D'))
+                    futurePred = model.predict(
+                        start=len(df), end=len(df)+daysForecast)
+                    futurePred = futurePred.reset_index(drop=True)
+                    futurePred = pd.concat([indexFutureDates, futurePred],
+                                           ignore_index=True, axis=1)
+                    futurePred = futurePred.set_index(
+                        futurePred[0], drop=True, inplace=False)
+                    futurePred.rename(
+                        columns={1: 'FuturePrediction'}, inplace=True)
+                    futurePred.index = futurePred.index.date
+                    futurePred.drop(columns=[0], inplace=True)
+
+                    plotForecast(train, test, testPred, futurePred)
+
+            elif modelSelection == 'MA':
+                q = modelParametersExpander.slider(
+                    'q', 0, 10, 1)
+                if modelTypeSelectionExpander.button('Compute Selected Model'):
+
+                    model = ARIMA(df[variable], order=(0, 0, q))
+                    model = model.fit()
+
+                    testPred = model.predict(
+                        start=len(train), end=len(df)-1)
+
+                # if forecastHorizontalMenu == "Model Summary":
+                    st.write("Model Summary")
+                    st.write(model.summary())
+                # elif forecastHorizontalMenu == "Data":
+                    st.write('Test Predictions')
+                    st.dataframe(testPred)
+
+                    st.write('Metrics')
+                    mse, mae, r2, rmse = errorCalculation(test, testPred)
+                    st.write('MSE: ' + str(mse))
+                    st.write('MAE: ' + str(mae))
+                    st.write('R2: ' + str(r2))
+                    st.write('RMSE: ' + str(rmse))
+
+                    st.write('Forecast')
+                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                        df.index[-1]), periods=daysForecast+1, freq='D'))
+                    futurePred = model.predict(
+                        start=len(df), end=len(df)+daysForecast)
+                    futurePred = futurePred.reset_index(drop=True)
+                    futurePred = pd.concat([indexFutureDates, futurePred],
+                                           ignore_index=True, axis=1)
+                    futurePred = futurePred.set_index(
+                        futurePred[0], drop=True, inplace=False)
+                    futurePred.rename(
+                        columns={1: 'FuturePrediction'}, inplace=True)
+                    futurePred.index = futurePred.index.date
+                    futurePred.drop(columns=[0], inplace=True)
+
+                    plotForecast(train, test, testPred, futurePred)
+
+            elif modelSelection == 'ARIMA':
+                p = modelParametersExpander.slider(
+                    'p', 0, 10, 1)
+                d = modelParametersExpander.slider(
+                    'd', 0, 10, 1)
+                q = modelParametersExpander.slider(
+                    'q', 0, 10, 1)
+                if modelTypeSelectionExpander.button('Compute Selected Model'):
+
+                    model = ARIMA(df[variable], order=(p, d, q))
+                    model = model.fit()
+
+                    testPred = model.predict(
+                        start=len(train), end=len(df)-1)
+
+                # if forecastHorizontalMenu == "Model Summary":
+                    st.write("Model Summary")
+                    st.write(model.summary())
+                # elif forecastHorizontalMenu == "Data":
+                    st.write('Test Predictions')
+                    st.dataframe(testPred)
+
+                    st.write('Metrics')
+                    mse, mae, r2, rmse = errorCalculation(test, testPred)
+                    st.write('MSE: ' + str(mse))
+                    st.write('MAE: ' + str(mae))
+                    st.write('R2: ' + str(r2))
+                    st.write('RMSE: ' + str(rmse))
+
+                    st.write('Forecast')
+                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                        df.index[-1]), periods=daysForecast+1, freq='D'))
+                    futurePred = model.predict(
+                        start=len(df), end=len(df)+daysForecast)
+                    futurePred = futurePred.reset_index(drop=True)
+                    futurePred = pd.concat([indexFutureDates, futurePred],
+                                           ignore_index=True, axis=1)
+                    futurePred = futurePred.set_index(
+                        futurePred[0], drop=True, inplace=False)
+                    futurePred.rename(
+                        columns={1: 'FuturePrediction'}, inplace=True)
+                    futurePred.index = futurePred.index.date
+                    futurePred.drop(columns=[0], inplace=True)
+
+                    plotForecast(train, test, testPred, futurePred)
+
+            elif modelSelection == 'SARIMAX':
+                p = modelParametersExpander.slider(
+                    'p', 0, 10, 1)
+                d = modelParametersExpander.slider(
+                    'd', 0, 10, 1)
+                q = modelParametersExpander.slider(
+                    'q', 0, 10, 1)
+                modelParametersExpander.write("Seasonal Parameters")
+                P = modelParametersExpander.slider(
+                    'P', 1, 10, 1)
+                D = modelParametersExpander.slider(
+                    'D', 1, 10, 1)
+                Q = modelParametersExpander.slider(
+                    'Q', 1, 10, 1)
+                M = modelParametersExpander.slider(
+                    'M', 1, 12, 7)
+                if modelTypeSelectionExpander.button('Compute Selected Model'):
+
+                    model = SARIMAX(df[variable], order=(
+                        p, d, q), seasonal_order=(P, D, Q, M))
+                    model = model.fit()
+
+                    testPred = model.predict(
+                        start=len(train), end=len(df)-1)
+
+                # if forecastHorizontalMenu == "Model Summary":
+                    st.write("Model Summary")
+                    st.write(model.summary())
+                # elif forecastHorizontalMenu == "Data":
+                    st.write('Test Predictions')
+                    st.dataframe(testPred)
+
+                    st.write('Metrics')
+                    mse, mae, r2, rmse = errorCalculation(test, testPred)
+                    st.write('MSE: ' + str(mse))
+                    st.write('MAE: ' + str(mae))
+                    st.write('R2: ' + str(r2))
+                    st.write('RMSE: ' + str(rmse))
+
+                    st.write('Forecast')
+                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                        df.index[-1]), periods=daysForecast+1, freq='D'))
+                    futurePred = model.predict(
+                        start=len(df), end=len(df)+daysForecast)
+                    futurePred = futurePred.reset_index(drop=True)
+                    futurePred = pd.concat([indexFutureDates, futurePred],
+                                           ignore_index=True, axis=1)
+                    futurePred = futurePred.set_index(
+                        futurePred[0], drop=True, inplace=False)
+                    futurePred.rename(
+                        columns={1: 'FuturePrediction'}, inplace=True)
+                    futurePred.index = futurePred.index.date
+                    futurePred.drop(columns=[0], inplace=True)
+
+                    plotForecast(train, test, testPred, futurePred)
+
+    elif modelType == 'Deep Learning':
+        modelParametersExpander = st.sidebar.expander("Model Parameters")
+
+        daysForecast = modelParametersExpander.slider(
+            'Select Days to Forecast', 1, 360, 10)
+
+        dataSelectionExpander = st.sidebar.expander(
+            "Data Train | Test Split")
+        train_size = dataSelectionExpander.slider(
+            'Train Size', 0.0, 1.0, 0.8, 0.05)
+
+        train, test = splitData(df, variable, train_size)
+
+        dataSelectionExpander.write(f"Train Size: {train.shape}")
+        dataSelectionExpander.write(f"Test Size: {test.shape}")
+
+        modelSelection = modelTypeSelectionExpander.selectbox(
+            "Select Statistical Model", ["LSTM", "HAR Net"])
+
+        scaleData = dataSelectionExpander.radio("Scale Data", [
+            "Yes", "No"], horizontal=True, index=0)
+
+        if scaleData == "Yes":
+            scaler = MinMaxScaler().fit(train)
+        else:
+            pass
+
+        if modelSelection == "LSTM":
+            n_input = modelParametersExpander.number_input(
+                'Number of inputs', 1, 20, 7)
+            n_features = modelParametersExpander.number_input(
+                'Number of features', 1, 20, 1)
+            batchSize = modelParametersExpander.number_input(
+                'Batch Size', 1, 20, 1)
+            epochs = modelParametersExpander.number_input('Epochs', 1, 100, 10)
+            neurons = modelParametersExpander.number_input(
+                'Neurons', 1, 100, 50)
+            activationFunction = modelParametersExpander.radio(
+                'Activation Function', ['relu', 'tanh', 'sigmoid'], index=0)
+            optimizer = modelParametersExpander.radio(
+                'Optimizer', ['adam', 'sgd', 'rmsprop'], index=0)
+            lossFunction = modelParametersExpander.radio(
+                'Loss Function', ['mse', 'mae', 'mape'], index=0)
+
+            if modelTypeSelectionExpander.button('Calculate Selected Model'):
+                pass
+                # generator = TimeseriesGenerator(
+                #     train, train, length=n_input, batch_size=batchSize)
+
+                # LSTMmodel = LSTMModel(n_input, n_features, neurons,
+                #                       epochs, activationFunction, optimizer, lossFunction)
+                # st.write(LSTMmodel.summary(print_fn=lambda x: st.text(x)))
+
+                # st.write(generator)
+                # LSTMmodel.fit(generator, epochs=epochs)
+
+        elif modelSelection == "HAR Net":
+            pass
+######################################
+with st.sidebar.container():
+    st.sidebar.subheader("University of Vienna | Research Project")
+    st.sidebar.write(
+        "###### App Authors: Roderick Perez & Le Thi (Janie) Thuy Trang")
+    st.sidebar.write("###### Faculty Advisor: Xandro Bayer")
+    st.sidebar.write("###### Updated: 30/9/2022")
