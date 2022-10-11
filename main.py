@@ -3,7 +3,7 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 from datetime import date
-
+import matplotlib.pyplot as plt
 import numpy as np
 ###############################
 # Internal Libraries
@@ -309,6 +309,8 @@ elif selected == 'Forecast':
             #     orientation="horizontal",
             #     default_index=0,
             # )
+            tab1, tab2, tab3, tab4 = st.tabs(
+                ['Model Summary', 'Data', 'Metrics', 'Plots'])
 
             if modelSelection == 'AR':
                 p = modelParametersExpander.slider(
@@ -322,35 +324,38 @@ elif selected == 'Forecast':
                         start=len(train), end=len(df)-1)
 
                 # if forecastHorizontalMenu == "Model Summary":
-                    st.write("Model Summary")
-                    st.write(model.summary())
+                    with tab1:
+                        st.write("Model Summary")
+                        st.write(model.summary())
                 # elif forecastHorizontalMenu == "Data":
-                    st.write('Test Predictions')
-                    st.dataframe(testPred)
+                    with tab2:
+                        st.write('Test Predictions')
+                        st.dataframe(testPred)
 
-                    st.write('Metrics')
-                    mse, mae, r2, rmse = errorCalculation(test, testPred)
-                    st.write('MSE: ' + str(mse))
-                    st.write('MAE: ' + str(mae))
-                    st.write('R2: ' + str(r2))
-                    st.write('RMSE: ' + str(rmse))
+                    with tab3:
+                        st.write('Metrics')
+                        mse, mae, r2, rmse = errorCalculation(test, testPred)
+                        st.write('MSE: ' + str(mse))
+                        st.write('MAE: ' + str(mae))
+                        st.write('R2: ' + str(r2))
+                        st.write('RMSE: ' + str(rmse))
+                    with tab4:
+                        st.write('Forecast')
+                        indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                            df.index[-1]), periods=daysForecast+1, freq='D'))
+                        futurePred = model.predict(
+                            start=len(df), end=len(df)+daysForecast)
+                        futurePred = futurePred.reset_index(drop=True)
+                        futurePred = pd.concat([indexFutureDates, futurePred],
+                                               ignore_index=True, axis=1)
+                        futurePred = futurePred.set_index(
+                            futurePred[0], drop=True, inplace=False)
+                        futurePred.rename(
+                            columns={1: 'FuturePrediction'}, inplace=True)
+                        futurePred.index = futurePred.index.date
+                        futurePred.drop(columns=[0], inplace=True)
 
-                    st.write('Forecast')
-                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
-                        df.index[-1]), periods=daysForecast+1, freq='D'))
-                    futurePred = model.predict(
-                        start=len(df), end=len(df)+daysForecast)
-                    futurePred = futurePred.reset_index(drop=True)
-                    futurePred = pd.concat([indexFutureDates, futurePred],
-                                           ignore_index=True, axis=1)
-                    futurePred = futurePred.set_index(
-                        futurePred[0], drop=True, inplace=False)
-                    futurePred.rename(
-                        columns={1: 'FuturePrediction'}, inplace=True)
-                    futurePred.index = futurePred.index.date
-                    futurePred.drop(columns=[0], inplace=True)
-
-                    plotForecast(train, test, testPred, futurePred)
+                        plotForecast(train, test, testPred, futurePred)
 
             elif modelSelection == 'MA':
                 q = modelParametersExpander.slider(
@@ -364,35 +369,39 @@ elif selected == 'Forecast':
                         start=len(train), end=len(df)-1)
 
                 # if forecastHorizontalMenu == "Model Summary":
-                    st.write("Model Summary")
-                    st.write(model.summary())
+                    with tab1:
+                        st.write("Model Summary")
+                        st.write(model.summary())
                 # elif forecastHorizontalMenu == "Data":
-                    st.write('Test Predictions')
-                    st.dataframe(testPred)
+                    with tab2:
+                        st.write('Test Predictions')
+                        st.dataframe(testPred)
 
-                    st.write('Metrics')
-                    mse, mae, r2, rmse = errorCalculation(test, testPred)
-                    st.write('MSE: ' + str(mse))
-                    st.write('MAE: ' + str(mae))
-                    st.write('R2: ' + str(r2))
-                    st.write('RMSE: ' + str(rmse))
+                    with tab3:
+                        st.write('Metrics')
+                        mse, mae, r2, rmse = errorCalculation(test, testPred)
+                        st.write('MSE: ' + str(mse))
+                        st.write('MAE: ' + str(mae))
+                        st.write('R2: ' + str(r2))
+                        st.write('RMSE: ' + str(rmse))
 
-                    st.write('Forecast')
-                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
-                        df.index[-1]), periods=daysForecast+1, freq='D'))
-                    futurePred = model.predict(
-                        start=len(df), end=len(df)+daysForecast)
-                    futurePred = futurePred.reset_index(drop=True)
-                    futurePred = pd.concat([indexFutureDates, futurePred],
-                                           ignore_index=True, axis=1)
-                    futurePred = futurePred.set_index(
-                        futurePred[0], drop=True, inplace=False)
-                    futurePred.rename(
-                        columns={1: 'FuturePrediction'}, inplace=True)
-                    futurePred.index = futurePred.index.date
-                    futurePred.drop(columns=[0], inplace=True)
+                    with tab4:
+                        st.write('Forecast')
+                        indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                            df.index[-1]), periods=daysForecast+1, freq='D'))
+                        futurePred = model.predict(
+                            start=len(df), end=len(df)+daysForecast)
+                        futurePred = futurePred.reset_index(drop=True)
+                        futurePred = pd.concat([indexFutureDates, futurePred],
+                                               ignore_index=True, axis=1)
+                        futurePred = futurePred.set_index(
+                            futurePred[0], drop=True, inplace=False)
+                        futurePred.rename(
+                            columns={1: 'FuturePrediction'}, inplace=True)
+                        futurePred.index = futurePred.index.date
+                        futurePred.drop(columns=[0], inplace=True)
 
-                    plotForecast(train, test, testPred, futurePred)
+                        plotForecast(train, test, testPred, futurePred)
 
             elif modelSelection == 'ARIMA':
                 p = modelParametersExpander.slider(
@@ -410,35 +419,39 @@ elif selected == 'Forecast':
                         start=len(train), end=len(df)-1)
 
                 # if forecastHorizontalMenu == "Model Summary":
-                    st.write("Model Summary")
-                    st.write(model.summary())
+                    with tab1:
+                        st.write("Model Summary")
+                        st.write(model.summary())
                 # elif forecastHorizontalMenu == "Data":
-                    st.write('Test Predictions')
-                    st.dataframe(testPred)
+                    with tab2:
+                        st.write('Test Predictions')
+                        st.dataframe(testPred)
 
-                    st.write('Metrics')
-                    mse, mae, r2, rmse = errorCalculation(test, testPred)
-                    st.write('MSE: ' + str(mse))
-                    st.write('MAE: ' + str(mae))
-                    st.write('R2: ' + str(r2))
-                    st.write('RMSE: ' + str(rmse))
+                    with tab3:
+                        st.write('Metrics')
+                        mse, mae, r2, rmse = errorCalculation(test, testPred)
+                        st.write('MSE: ' + str(mse))
+                        st.write('MAE: ' + str(mae))
+                        st.write('R2: ' + str(r2))
+                        st.write('RMSE: ' + str(rmse))
 
-                    st.write('Forecast')
-                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
-                        df.index[-1]), periods=daysForecast+1, freq='D'))
-                    futurePred = model.predict(
-                        start=len(df), end=len(df)+daysForecast)
-                    futurePred = futurePred.reset_index(drop=True)
-                    futurePred = pd.concat([indexFutureDates, futurePred],
-                                           ignore_index=True, axis=1)
-                    futurePred = futurePred.set_index(
-                        futurePred[0], drop=True, inplace=False)
-                    futurePred.rename(
-                        columns={1: 'FuturePrediction'}, inplace=True)
-                    futurePred.index = futurePred.index.date
-                    futurePred.drop(columns=[0], inplace=True)
+                    with tab4:
+                        st.write('Forecast')
+                        indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                            df.index[-1]), periods=daysForecast+1, freq='D'))
+                        futurePred = model.predict(
+                            start=len(df), end=len(df)+daysForecast)
+                        futurePred = futurePred.reset_index(drop=True)
+                        futurePred = pd.concat([indexFutureDates, futurePred],
+                                               ignore_index=True, axis=1)
+                        futurePred = futurePred.set_index(
+                            futurePred[0], drop=True, inplace=False)
+                        futurePred.rename(
+                            columns={1: 'FuturePrediction'}, inplace=True)
+                        futurePred.index = futurePred.index.date
+                        futurePred.drop(columns=[0], inplace=True)
 
-                    plotForecast(train, test, testPred, futurePred)
+                        plotForecast(train, test, testPred, futurePred)
 
             elif modelSelection == 'SARIMAX':
                 p = modelParametersExpander.slider(
@@ -466,35 +479,38 @@ elif selected == 'Forecast':
                         start=len(train), end=len(df)-1)
 
                 # if forecastHorizontalMenu == "Model Summary":
-                    st.write("Model Summary")
-                    st.write(model.summary())
+                    with tab1:
+                        st.write("Model Summary")
+                        st.write(model.summary())
                 # elif forecastHorizontalMenu == "Data":
-                    st.write('Test Predictions')
-                    st.dataframe(testPred)
+                    with tab2:
+                        st.write('Test Predictions')
+                        st.dataframe(testPred)
+                    with tab3:
+                        st.write('Metrics')
+                        mse, mae, r2, rmse = errorCalculation(test, testPred)
+                        st.write('MSE: ' + str(mse))
+                        st.write('MAE: ' + str(mae))
+                        st.write('R2: ' + str(r2))
+                        st.write('RMSE: ' + str(rmse))
 
-                    st.write('Metrics')
-                    mse, mae, r2, rmse = errorCalculation(test, testPred)
-                    st.write('MSE: ' + str(mse))
-                    st.write('MAE: ' + str(mae))
-                    st.write('R2: ' + str(r2))
-                    st.write('RMSE: ' + str(rmse))
+                    with tab4:
+                        st.write('Forecast')
+                        indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
+                            df.index[-1]), periods=daysForecast+1, freq='D'))
+                        futurePred = model.predict(
+                            start=len(df), end=len(df)+daysForecast)
+                        futurePred = futurePred.reset_index(drop=True)
+                        futurePred = pd.concat([indexFutureDates, futurePred],
+                                               ignore_index=True, axis=1)
+                        futurePred = futurePred.set_index(
+                            futurePred[0], drop=True, inplace=False)
+                        futurePred.rename(
+                            columns={1: 'FuturePrediction'}, inplace=True)
+                        futurePred.index = futurePred.index.date
+                        futurePred.drop(columns=[0], inplace=True)
 
-                    st.write('Forecast')
-                    indexFutureDates = pd.DataFrame(pd.date_range(start=pd.to_datetime(
-                        df.index[-1]), periods=daysForecast+1, freq='D'))
-                    futurePred = model.predict(
-                        start=len(df), end=len(df)+daysForecast)
-                    futurePred = futurePred.reset_index(drop=True)
-                    futurePred = pd.concat([indexFutureDates, futurePred],
-                                           ignore_index=True, axis=1)
-                    futurePred = futurePred.set_index(
-                        futurePred[0], drop=True, inplace=False)
-                    futurePred.rename(
-                        columns={1: 'FuturePrediction'}, inplace=True)
-                    futurePred.index = futurePred.index.date
-                    futurePred.drop(columns=[0], inplace=True)
-
-                    plotForecast(train, test, testPred, futurePred)
+                        plotForecast(train, test, testPred, futurePred)
 
     elif modelType == 'Deep Learning':
         modelParametersExpander = st.sidebar.expander("Model Parameters")
@@ -518,9 +534,37 @@ elif selected == 'Forecast':
         scaleData = dataSelectionExpander.radio("Scale Data", [
             "Yes", "No"], horizontal=True, index=0)
 
+        tab1, tab2, tab3, tab4 = st.tabs(
+            ['Model Summary', 'Data', 'Metrics', 'Plots'])
+
         if scaleData == "Yes":
-            scaler = MinMaxScaler().fit(train)
-        else:
+            scalerSelection = dataSelectionExpander.selectbox('Select Scaler Method',
+                                                              ['MinMax Scaler', 'Standard Scaler'])
+
+            if scalerSelection == 'MinMax Scaler':
+                scaler = MinMaxScaler().fit(train)
+                train['Scaled Data'] = scaler.transform(train)
+                test['Scaled Data'] = scaler.transform(test)
+            elif scalerSelection == 'Standard Scaler':
+                scaler = StandardScaler().fit(train)
+                train['Scaled Data'] = scaler.transform(train)
+                test['Scaled Data'] = scaler.transform(test)
+
+        with tab1:
+            pass
+        with tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader('Data Train')
+                st.write('Train values: ', len(train))
+                st.dataframe(train)
+            with col2:
+                st.subheader('Data Test')
+                st.write('Test values: ', len(test))
+                st.dataframe(test)
+        with tab3:
+            pass
+        with tab4:
             pass
 
         if modelSelection == "LSTM":
@@ -541,6 +585,7 @@ elif selected == 'Forecast':
                 'Loss Function', ['mse', 'mae', 'mape'], index=0)
 
             if modelTypeSelectionExpander.button('Calculate Selected Model'):
+
                 pass
                 # generator = TimeseriesGenerator(
                 #     train, train, length=n_input, batch_size=batchSize)

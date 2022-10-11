@@ -1,7 +1,6 @@
 import yfinance as yf
 import streamlit as st
 import pandas as pd
-import pandas as pd
 from datetime import date, datetime
 import pytz
 import numpy as np
